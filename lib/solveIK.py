@@ -1,6 +1,6 @@
 import numpy as np
-from math import pi, acos
 from numpy import sin , cos
+from math import pi, acos
 from scipy.linalg import null_space
 
 from calcJacobian import calcJacobian
@@ -15,7 +15,6 @@ class IK:
 
     center = lower + (upper - lower) / 2 # compute middle of range of motion of each joint
     fk = FK()
-
     def __init__(self,linear_tol=1e-4, angular_tol=1e-3, max_steps=500, min_step_size=1e-5):
         """
         Constructs an optimization-based IK solver with given solver parameters.
@@ -69,19 +68,19 @@ class IK:
         """
 
         ## STUDENT CODE STARTS HERE
-        d_current = current[0:3,3]
-        d_target = target[0:3,3]
-
-        R_current = current[0:3,0:3]
-        R_target = target[0:3,0:3]
-
-        displacement = d_target-d_current
-
-        R_current_target = R_current.T@R_target
-        S = 0.5*(R_current_target-R_current_target.T)
-        axis_current = np.array([S[2,1],-S[2,0],S[1,0]])
-        axis = R_current@axis_current
-
+        displacement = np.zeros(3)
+        axis = np.zeros(3)
+        displacement = target - current
+        displacement = displacement[0:3,3]
+        #displacement[0] = current[3,0]-target[3,0]
+        #displacement[1] = current[3,1]-target[3,1]
+        #displacement[2] = current[3,2]-target[3,2]
+        R = np.linalg.inv(current[0:3,0:3]) @ target[0:3,0:3]
+        S = 1/2 * (R - R.T)
+        axis[0] = S[2,1]
+        axis[1] = S[0,2]
+        axis[2] = S[1,0]
+        axis = current[0:3,0:3] @ axis
         ## END STUDENT CODE
 
         return displacement, axis
@@ -110,18 +109,18 @@ class IK:
         """
 
         ## STUDENT CODE STARTS HERE
-        d_G = G[0:3,3]
-        d_H = H[0:3,3]
 
-        R_G = G[0:3,0:3]
-        R_H = H[0:3,0:3]
-
-        distance = np.linalg.norm(d_G-d_H,2)
-        R_G_H = R_G.T@R_H
-        arg = (np.trace(R_G_H)-1)*0.5
-        arg = max(min(1, arg), -1)
-        angle = np.arccos(arg)
-
+        distance = 0
+        angle = 0
+        
+        R = np.linalg.inv(G) @ H
+        distance = np.sqrt((G[3,0]-H[3,0])**2+(G[3,1]-H[3,1])**2+(G[3,2]-H[3,2])**2)
+        temp = (np.trace(R)-1)/2
+        if temp > 1:
+            temp = 1
+        if temp < -1:
+            temp = -1
+        angle = np.arccos(temp)
         ## END STUDENT CODE
 
         return distance, angle
@@ -144,33 +143,16 @@ class IK:
         """
 
         ## STUDENT CODE STARTS HERE
-        jointPositions, current = self.fk.forward(q)
-        distance, angle = self.distance_and_angle(current,target)
 
-        ## Condition 1 : The joint angles are within the joint limits
-        if (self.lower<=q).all() and (q<=self.upper).all():
-            cond1 = True
-        else:
-            cond1 = False
-
-        ## Condition 2: The distance between the achieved and target end effector positions is less than linear_tol
-        if distance < self.linear_tol:
-            cond2 = True
-        else:
-            cond2 = False
-
-        ## Condition 3: The magnitude of the angle between the achieved and target end effector orientations is less than angular_tol
-        if angle < self.angular_tol:
-            cond3 = True
-        else:
-            cond3 = False
-
-        ## Checking conditions 1,2,3
-        if cond1 and cond2 and cond3:
-            success = True
-        else:
+        success = True
+        for i in range(0,7):
+            if (q[i] > self.upper[i] or q[i] < self.lower[i]):
+                success = False 
+                break   
+        joints, pose = self.fk.forward(q)
+        distance, angle = self.distance_and_angle(pose, target)
+        if distance > self.linear_tol or angle > self.angular_tol:
             success = False
-
         ## END STUDENT CODE
 
         return success
@@ -194,12 +176,13 @@ class IK:
         dq - a desired joint velocity to perform this task, which will smoothly
         decay to zero magnitude as the task is achieved
         """
-
         ## STUDENT CODE STARTS HERE
-        jointPositions, current = IK.fk.forward(q)
-        displacement, axis = IK.displacement_and_axis(target, current)
-        dq = IK_velocity(q, displacement, axis)  # IK_velocity(q_in, v_in, omega_in)
 
+        dq = np.zeros(7)
+        joints, current = FK().forward(q)
+        displacement, axis = IK.displacement_and_axis(target, current)
+        dq = IK_velocity(q, displacement, axis)
+        #print('q,displacement, axis', q, displacement, axis)
         ## END STUDENT CODE
 
         return dq
@@ -256,9 +239,9 @@ class IK:
 
         q = seed
         rollout = []
-        iter = 0
+        steps = 0
         while True:
-            iter = iter + 1
+            steps = steps + 1
             rollout.append(q)
 
             # Primary Task - Achieve End Effector Pose
@@ -268,20 +251,25 @@ class IK:
             dq_center = self.joint_centering_task(q)
 
             ## STUDENT CODE STARTS HERE
+            J = calcJacobian(q)
+            dq_null = null_space(J)
+            #print('dq_center, dq_null',dq_center,dq_null)
 
             # Task Prioritization
-            J = calcJacobian(q)
-            dq_null = null_space(J)[:,0]
-            dq = dq_ik + (np.dot(dq_center,dq_null)/np.linalg.norm(dq_null)**2)*dq_null
-
+            # dq_null np.array([[]])
+            dq = np.zeros(7) # TODO: implement me!
+            #print('update', (np.dot(dq_null.flatten(),dq_center))/(np.linalg.norm(dq_null)**2)*dq_null)
+            #print('dq before update:', dq)
+            update = (np.dot(dq_null.flatten(),dq_center))/(np.linalg.norm(dq_null)**2)*dq_null
+            dq = dq_ik + update.flatten()
+            
             # Termination Conditions
-            if iter == self.max_steps or np.linalg.norm(dq,2) <= self.min_step_size :
-                break
-
-
+            if steps > self.max_steps or np.linalg.norm(dq) < self.min_step_size: # TODO: check termination conditions
+                # print('steps:',steps, np.linalg.norm(dq), self.min_step_size)
+                break # exit the while loop if conditions are met!
 
             ## END STUDENT CODE
-
+            # print('q,dq',q,dq)
             q = q + dq
 
         success = self.is_valid_solution(q,target)
@@ -290,34 +278,6 @@ class IK:
 ################################
 ## Simple Testing Environment ##
 ################################
-
-# if __name__ == "__main__":
-
-#     np.set_printoptions(suppress=True,precision=5)
-
-#     ik = IK()
-
-#     # matches figure in the handout
-#     seed = np.array([0,0,0,-pi/2,0,pi/2,pi/4])
-
-#     target = np.array([
-#         [0,-1,0,0.3],
-#         [-1,0,0,0],
-#         [0,0,-1,.5],
-#         [0,0,0, 1],
-#     ])
-
-#     q, success, rollout = ik.inverse(target, seed)
-
-#     for i, q in enumerate(rollout):
-#         joints, pose = ik.fk.forward(q)
-#         d, ang = IK.distance_and_angle(target,pose)
-#         print('iteration:',i,' q =',q, ' d={d:3.4f}  ang={ang:3.3f}'.format(d=d,ang=ang))
-
-#     print("Success: ",success)
-#     print("Solution: ",q)
-#     print("Iterations:", len(rollout))
-
 def transform(d,rpy):
     """
     Helper function to compute a homogenous transform of a translation by d and
@@ -372,46 +332,135 @@ if __name__ == "__main__":
     T_robot_goal_back = transform(np.array([0.562,-0.169,0]),np.array([pi/2,0,-pi/2]))    # sideway approach
     T_robot_goal_dynamic = transform(np.array([0.562,-0.169,0]),np.array([-pi/2,0,-pi/2])) @ transform(np.array([0,0,0]),np.array([0,-pi/4,0]))
 
-    T_robot_static_setpoint = transform(np.array([0.562,0.169,0.2+0.05*2]),np.array([pi,0,0]))
+    T_robot_static_setpoint = transform(np.array([0.562,0.169,0.2+0.05*3]),np.array([pi,0,0]))  # TESTING
 
     T_robot_dynamic = transform(np.array([0,-0.698-0.005,0.2+0.05/2]),np.array([pi,pi/4,0]))
     T_robot_ready = transform(np.array([0,-0.553,0.2+0.05/2-0.03]),np.array([pi,pi/4,0]))
+
 
     seed_static_front = np.array([-0.88827 , 0.48444 , 0.31647 ,-1.22539,  1.34645 , 0.9864,  -0.92593])  # sideway approach
     seed_static_back = np.array([ 0.05551 , 0.01429 , 0.03045 ,-1.82928 ,-1.548  ,  1.48791, -0.51166])   # sideway approach
     seed_static_top =  np.array([0,0,0,-pi/2,0,pi/2,pi/4])
     seed_dynamic =  np.array([0.25,-1.38,-1.82,-1.77,0.25,1.96,-1.09])
     seed =  np.array([0,0,0,-pi/2,0,pi/2,pi/4])
-
-    q_static_setpoint = np.array([ 0.2158,   0.14197,  0.0795,  -1.96261, -0.01305,  2.10411,  1.08654])
-    q_dynamic_ready = np.array([ 0.15706, -0.93944, -1.83014, -2.1291,  -0.16416,  2.27171, -0.84507])
-    q_dynamic_dynamic = np.array([ 0.5687,  -1.21852, -1.85342, -1.44783, -0.37109,  1.97274, -0.69434])
     
-    print("q_static_top2:")
+
+    print("q_stack_top1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_top    # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_top)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_top2:")
     for block_num in range(0,6):
         target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_top
         q, success, rollout = ik.inverse(target, seed_static_top)
-        print(block_num,success,repr(q))
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
 
-    print("q_static_front2:")
+    print("q_stack_top3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_top   # TESTING !!!
+        q, success, rollout = ik.inverse(target, seed_static_top)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_front1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_front   # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_front)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_front2:")
     for block_num in range(0,6):
         target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_front
         q, success, rollout = ik.inverse(target, seed_static_front)
-        print(block_num,success,repr(q))
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
 
-    print("q_static_back2:")
+    print("q_stack_front3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+4)]),np.array([0,0,0])) @ T_robot_goal_front # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_front)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_back1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_back   # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_back2:")
     for block_num in range(0,6):
         target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_back
         q, success, rollout = ik.inverse(target, seed_static_back)
-        print(block_num,success,repr(q))
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_back3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+4)]),np.array([0,0,0])) @ T_robot_goal_back   # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+    
+    print("q_stack_else1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_dynamic # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_else2:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_dynamic
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_else3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_dynamic   # TESTING  NEW!
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_dynamic_ready:")
+    q, success, rollout = ik.inverse(T_robot_ready, seed_dynamic)
+    print(repr(q))
+    T_robot_ready = transform(np.array([0,0,0]),np.array([0,0,-pi/9])) @ T_robot_dynamic   # scooping approach  NEW!
+    print("NEW  q_dynamic_ready:")
+    q, success, rollout = ik.inverse(T_robot_ready, seed_dynamic)
+    print(repr(q))
+    print("q_dynamic_dynamic:")
+    q, success, rollout = ik.inverse(T_robot_dynamic, seed_dynamic)
+    print(repr(q))
         
     print("*****************************  RED TEAM  *********************************")
+    T_robot_goal_top = transform(np.array([0.562,0.169,0]),np.array([pi,0,0]))
     T_robot_goal_top = transform(np.array([0.562,0.169,0]),np.array([pi,0,0]))
     T_robot_goal_front = transform(np.array([0.562,0.169,0]),np.array([-pi/2,0,-pi/2]))  # sideway approach
     T_robot_goal_back = transform(np.array([0.562,0.169,0]),np.array([pi/2,0,-pi/2]))    # sideway approach
     T_robot_goal_dynamic = transform(np.array([0.562,0.169,0]),np.array([-pi/2,0,-pi/2])) @ transform(np.array([0,0,0]),np.array([0,-pi/4,0]))
 
-    T_robot_static_setpoint = transform(np.array([0.562,-0.169,0.2+0.05*2]),np.array([pi,0,0]))
+    T_robot_static_setpoint = transform(np.array([0.562,-0.169,0.2+0.05*3]),np.array([pi,0,0]))   # TESTING
+
     T_robot_dynamic = transform(np.array([0,0.698+0.02,0.2+0.05/2]),np.array([0,-pi/2-pi/4,0]))
     T_robot_ready = transform(np.array([0,0.553,0.2+0.05/2-0.03]),np.array([0,-pi/2-pi/4,0]))
 
@@ -421,24 +470,112 @@ if __name__ == "__main__":
     seed_static_back = np.array([ 0.05551 , 0.01429 , 0.03045 ,-1.82928 ,-1.548  ,  1.48791, -0.51166])   # sideway approach
     seed_dynamic = np.array([ 0.7546  , 1.16678 , 0.80799, -1.28532,  0.7526  , 1.66755 ,-1.31044])
 
-    print("q_static_top2:")
+    print("q_stack_top1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_top    # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_top)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_top2:")
     for block_num in range(0,6):
         target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_top
         q, success, rollout = ik.inverse(target, seed_static_top)
-        print(block_num,success,repr(q))
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
 
-    print("q_static_front2:")
+    print("q_stack_top3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_top   # TESTING !!!
+        q, success, rollout = ik.inverse(target, seed_static_top)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_front1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_front   # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_front)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_front2:")
     for block_num in range(0,6):
         target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_front
         q, success, rollout = ik.inverse(target, seed_static_front)
-        print(block_num,success,repr(q))
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
 
-    print("q_static_back2:")
+    print("q_stack_front3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+4)]),np.array([0,0,0])) @ T_robot_goal_front # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_front)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_back1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_back   # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_back2:")
     for block_num in range(0,6):
         target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_back
         q, success, rollout = ik.inverse(target, seed_static_back)
-        print(block_num,success,repr(q))
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
 
+    print("q_stack_back3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+4)]),np.array([0,0,0])) @ T_robot_goal_back   # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+    
+    print("q_stack_else1:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_dynamic # TESTING
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_else2:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+1)-0.015]),np.array([0,0,0])) @ T_robot_goal_dynamic
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_stack_else3:")
+    for block_num in range(0,6):
+        target = transform(np.array([0,0,0.2+0.05*(block_num+3)]),np.array([0,0,0])) @ T_robot_goal_dynamic   # TESTING  NEW!
+        q, success, rollout = ik.inverse(target, seed_static_back)
+        if success == False:
+            print("FFFFFFFFFFFFFFFFFFFFFFFUCK UUUUPPPP!!!!!!!!!!!!!!!!!!")
+        print(block_num,repr(q))
+
+    print("q_dynamic_ready:")
+    q, success, rollout = ik.inverse(T_robot_ready, seed_dynamic)
+    print(repr(q))
+    T_robot_ready = transform(np.array([0,0,0]),np.array([0,0,-pi/9])) @ T_robot_dynamic   # scooping approach  NEW!
+    print("NEW  q_dynamic_ready:")
+    q, success, rollout = ik.inverse(T_robot_ready, seed_dynamic)
+    print(repr(q))
+    print("q_dynamic_dynamic:")
+    q, success, rollout = ik.inverse(T_robot_dynamic, seed_dynamic)
+    print(repr(q))
     # np.savetxt('data.txt',q,fmt='%10.5f',delimiter=',')
     # f.write("\n\n")
 
@@ -447,6 +584,8 @@ if __name__ == "__main__":
     #     d, ang = IK.distance_and_angle(target,pose)
     #     print('iteration:',i,' q =',q, ' d={d:3.4f}  ang={ang:3.3f}'.format(d=d,ang=ang))
 
-    print("Success: ",success)
-    print("Solution: ",q)
-    print("Iterations:", len(rollout))
+    # print("Success: ",success)
+    # print("Solution: ",q)
+    # print("Iterations:", len(rollout))
+
+     
